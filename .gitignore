@@ -1,0 +1,23 @@
+# deps / build
+node_modules/
+.next/
+.next-build/
+*.tsbuildinfo
+next-env.d.ts
+
+# secrets
+.env
+.env.local
+.env*.local
+
+# python / os / editor
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+.idea/
+.vscode/
+
+# runtime state
+.data/
+bridge/.steps_baseline.json

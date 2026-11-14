@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+/* Design tokens (orchestration/DESIGN_SYSTEM.md). Tailwind classes cover UI;
+   these CSS variables are for SVG/canvas and inline styles. */
+:root {
+	--np-bg: #f8fafc; /* slate-50 */
+	--np-surface: #ffffff;
+	--np-text: #0f172a; /* slate-900 */
+	--np-text-muted: #64748b; /* slate-500 */
+	--np-border: #e2e8f0; /* slate-200 */
+	--np-brand: #2563eb;
+	--np-alert: #ef4444; /* red-500 */
+	--np-warn: #fbbf24; /* amber-400 */
+	--np-ok: #10b981; /* emerald-500 */
+	--np-radius-card: 0.75rem; /* rounded-xl */
+	--np-radius-control: 0.5rem; /* rounded-lg */
+}
+
+body {
+	background: var(--np-bg);
+	color: var(--np-text);
+	font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
+}
