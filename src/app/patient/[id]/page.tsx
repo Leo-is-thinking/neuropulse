@@ -1,54 +1,45 @@
 "use client";
 
 import {
-	Activity,
 	ArrowLeft,
-	ArrowRight,
 	CalendarClock,
+	Check,
 	Loader2,
 	Mic,
 	PenLine,
 	Pill,
 	Radio,
 	Square,
-	Stethoscope,
 	WifiOff,
 } from "lucide-react";
 import Link from "next/link";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { AppSidebar } from "@/components/AppSidebar";
-import ClinicalReportView from "@/components/ClinicalReportView";
-import EntanglementView from "@/components/EntanglementView";
+import LiveTremorEpisodes from "@/components/LiveTremorEpisodes";
 import { VERIFY_CELL_EVENT } from "@/components/RawDataTables";
-import SecureGate from "@/components/SecureGate";
 import StreamPanels from "@/components/StreamPanels";
 import { CHECKUPS } from "@/data/checkups";
 import { ROSTER } from "@/data/rosterCatalog";
 import { renderBold } from "@/lib/renderBold";
-import type { ActuationResult, Analysis, Patient } from "@/types/clinical";
-
-const POLL_MS = 2000;
-const URGENCY_RING = {
-	critical: "ring-red-500 animate-pulse",
-	watch: "ring-amber-400",
-	stable: "ring-emerald-500",
-} as const;
+import type { Patient } from "@/types/clinical";
 
 interface SpeechRec {
 	lang: string;
 	continuous: boolean;
 	interimResults: boolean;
-	onresult: (e: {
-		resultIndex: number;
-		results: ArrayLike<
-			ArrayLike<{ transcript: string }> & { isFinal: boolean }
-		>;
-	}) => void;
-	onend: () => void;
-	onerror: () => void;
+	onresult: ((e: never) => void) | null;
+	onend: (() => void) | null;
+	onerror: (() => void) | null;
 	start: () => void;
 	stop: () => void;
 }
+
+const POLL_MS = 1000;
+const URGENCY_RING = {
+	critical: "ring-red-500 animate-pulse",
+	watch: "ring-amber-400",
+	stable: "ring-emerald-500",
+} as const;
 
 function DoseCurve({
 	points,
@@ -197,15 +188,16 @@ function PatientCockpit({ params }: { params: Promise<{ id: string }> }) {
 	const [patient, setPatient] = useState<Patient | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [online, setOnline] = useState(true);
-	const [analysis, setAnalysis] = useState<Analysis | null>(null);
-	const [analyzing, setAnalyzing] = useState(false);
+	const [band, setBand] = useState<{
+		state: "connected" | "disconnected";
+		source: "band" | "sim";
+	} | null>(null);
 	const [highlight, setHighlight] = useState<string | null>(null);
-	const [assessment, setAssessment] = useState("");
 	const [savedNotes, setSavedNotes] = useState<string | null>(null);
+	const [assessment, setAssessment] = useState("");
 	const [noteSaved, setNoteSaved] = useState(false);
 	const [flash, setFlash] = useState<Set<string>>(new Set());
 	const prevCells = useRef<Map<string, string>>(new Map());
-	const resultRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
 		try {
@@ -232,7 +224,7 @@ function PatientCockpit({ params }: { params: Promise<{ id: string }> }) {
 		r.lang = "en-US";
 		r.continuous = true;
 		r.interimResults = false;
-		r.onresult = (e: {
+		r.onresult = ((e: {
 			resultIndex: number;
 			results: ArrayLike<
 				ArrayLike<{ transcript: string }> & { isFinal: boolean }
@@ -245,7 +237,7 @@ function PatientCockpit({ params }: { params: Promise<{ id: string }> }) {
 				setAssessment(
 					(a) => `${a}${a && !a.endsWith(" ") ? " " : ""}${t.trim()}`,
 				);
-		};
+		}) as (e: never) => void;
 		r.onend = () => setListening(false);
 		r.onerror = () => setListening(false);
 		recRef.current = r;
@@ -290,6 +282,12 @@ function PatientCockpit({ params }: { params: Promise<{ id: string }> }) {
 			}
 			setPatient(p);
 			setOnline(true);
+			try {
+				const bs = await fetch(`/api/band-status?patientId=${id}`, {
+					cache: "no-store",
+				});
+				if (bs.ok) setBand(await bs.json());
+			} catch {}
 		} catch {
 			setOnline(false);
 		}
@@ -321,43 +319,6 @@ function PatientCockpit({ params }: { params: Promise<{ id: string }> }) {
 		if (m) verify(decodeURIComponent(m[1]));
 		return () => window.removeEventListener(VERIFY_CELL_EVENT, h);
 	}, [verify]);
-
-	const apply = useCallback(
-		async (recIds: string[]): Promise<ActuationResult> => {
-			const res = await fetch("/api/actuate-wrist", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ patientId: id, recommendationIds: recIds }),
-			});
-			if (!res.ok) throw new Error(`actuate-wrist ${res.status}`);
-			const result = (await res.json()) as ActuationResult;
-			load();
-			return result;
-		},
-		[id, load],
-	);
-
-	const synthesize = async () => {
-		setAnalyzing(true);
-		setAnalysis(null);
-		requestAnimationFrame(() =>
-			resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
-		);
-		try {
-			const res = await fetch("/api/analyze", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ patientId: id }),
-			});
-			if (!res.ok) throw new Error(String(res.status));
-			setAnalysis((await res.json()) as Analysis);
-		} catch {
-			setError("Diagnosis failed. Please retry.");
-			setTimeout(() => setError(null), 4000);
-		} finally {
-			setAnalyzing(false);
-		}
-	};
 
 	if (error === "Patient not found")
 		return (
@@ -415,18 +376,39 @@ function PatientCockpit({ params }: { params: Promise<{ id: string }> }) {
 								</span>
 							)}
 						</h1>
-						<span
-							className={`ml-auto inline-flex items-center gap-1.5 text-sm font-medium ${online ? "text-blue-700" : "text-slate-500"}`}
-						>
-							{online ? (
-								<Radio className="h-4 w-4" aria-hidden />
-							) : (
-								<WifiOff className="h-4 w-4" aria-hidden />
-							)}
-							{online
-								? "Vexo Bracelet Connected"
-								: "Vexo Bracelet Disconnected"}
-						</span>
+						{patient.id === "armel" ? (
+							<span
+								role="status"
+								className={`ml-auto inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm font-medium ${band?.state === "connected" ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-slate-100 text-slate-500"}`}
+							>
+								<span className="relative flex h-2.5 w-2.5">
+									{band?.state === "connected" && (
+										<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" />
+									)}
+									<span
+										className={`relative inline-flex h-2.5 w-2.5 rounded-full ${band?.state === "connected" ? "bg-blue-600" : "bg-slate-400"}`}
+									/>
+								</span>
+								{band?.state === "connected"
+									? band.source === "sim"
+										? "Bracelet connected (simulated)"
+										: "Bracelet connected"
+									: "Bracelet disconnected"}
+							</span>
+						) : (
+							<span
+								className={`ml-auto inline-flex items-center gap-1.5 text-sm font-medium ${online ? "text-blue-700" : "text-slate-500"}`}
+							>
+								{online ? (
+									<Radio className="h-4 w-4" aria-hidden />
+								) : (
+									<WifiOff className="h-4 w-4" aria-hidden />
+								)}
+								{online
+									? "Vexo Bracelet Connected"
+									: "Vexo Bracelet Disconnected"}
+							</span>
+						)}
 					</div>
 				</div>
 
@@ -516,27 +498,20 @@ function PatientCockpit({ params }: { params: Promise<{ id: string }> }) {
 						</section>
 					)}
 
-					{patient.id === "henri-m" && (
-						<Link
-							href="/modelization"
-							className="group flex flex-wrap items-center gap-4 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 p-5 text-white shadow-md transition hover:shadow-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
-						>
-							<span className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/20">
-								<Activity className="h-6 w-6" aria-hidden />
-							</span>
-							<span className="min-w-0 flex-1">
-								<span className="block text-lg font-bold tracking-tight">
-									Review this week's episodes
-								</span>
-								<span className="block text-sm text-blue-100">
-									Replay the tremors, compare the voice over time, see when it
-									happens
-								</span>
-							</span>
-							<span className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-semibold text-blue-700 transition-transform group-hover:translate-x-0.5">
-								Open modelization <ArrowRight className="h-4 w-4" aria-hidden />
-							</span>
-						</Link>
+					{patient.id === "armel" && (
+						<section aria-labelledby="armel-episodes">
+							<h2
+								id="armel-episodes"
+								className="text-lg font-bold tracking-tight text-slate-900"
+							>
+								Tremor episodes · 3D replay
+							</h2>
+							<p className="mb-3 mt-1 text-sm text-slate-600">
+								Recorded by the band. Replay shows her own forearm, measured on
+								her photos, in the posture the band suggests.
+							</p>
+							<LiveTremorEpisodes patientId="armel" />
+						</section>
 					)}
 
 					<div>
@@ -591,7 +566,6 @@ function PatientCockpit({ params }: { params: Promise<{ id: string }> }) {
 								id="assessment"
 								value={assessment}
 								onChange={(e) => setAssessment(e.target.value)}
-								onBlur={saveNotes}
 								rows={4}
 								placeholder="Write or dictate your observations…"
 								className="w-full resize-y rounded-lg border border-slate-200 py-3 pl-3 pr-16 text-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
@@ -601,13 +575,6 @@ function PatientCockpit({ params }: { params: Promise<{ id: string }> }) {
 								onClick={toggleMic}
 								aria-pressed={listening}
 								aria-label={listening ? "Stop dictation" : "Dictate your notes"}
-								title={
-									micOk
-										? listening
-											? "Stop dictation"
-											: "Dictate"
-										: "Dictation not supported in this browser"
-								}
 								disabled={!micOk}
 								className={`absolute right-3 top-3 flex h-10 w-10 cursor-pointer items-center justify-center rounded-full transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40 ${listening ? "animate-pulse bg-red-500 text-white" : "bg-blue-600 text-white hover:bg-blue-700"}`}
 							>
@@ -619,70 +586,21 @@ function PatientCockpit({ params }: { params: Promise<{ id: string }> }) {
 							</button>
 						</div>
 						<div className="mt-4 flex flex-wrap items-center justify-end gap-3">
+							{noteSaved && (
+								<span className="inline-flex items-center gap-1 text-sm text-emerald-600">
+									<Check className="h-4 w-4" aria-hidden /> Saved
+								</span>
+							)}
 							<button
-								onClick={synthesize}
-								disabled={analyzing}
+								type="button"
+								onClick={saveNotes}
+								disabled={!assessment.trim()}
 								className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors duration-150 hover:bg-blue-700 disabled:opacity-60"
 							>
-								{analyzing ? (
-									<Loader2 className="h-4 w-4 animate-spin" />
-								) : (
-									<Stethoscope className="h-4 w-4" aria-hidden />
-								)}
-								Run diagnosis &amp; proposals
+								Save my notes for next time
 							</button>
 						</div>
 					</section>
-
-					<div ref={resultRef} className="scroll-mt-20 space-y-5">
-						{analyzing && (
-							<div className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white p-12 text-sm text-slate-500">
-								<Loader2 className="h-4 w-4 animate-spin" /> Correlating the
-								data streams…
-							</div>
-						)}
-						{analysis && (
-							<>
-								<EntanglementView patient={patient} analysis={analysis} />
-								<div className="grid gap-4 md:grid-cols-2">
-									<section className="rounded-xl border border-slate-200 bg-white p-5">
-										<h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-											<PenLine className="h-4 w-4 text-blue-600" aria-hidden />{" "}
-											Your assessment
-										</h2>
-										<p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
-											{assessment.trim() || (
-												<span className="text-slate-400">
-													No assessment written.
-												</span>
-											)}
-										</p>
-									</section>
-									<section className="rounded-xl border border-blue-200 bg-blue-50/50 p-5">
-										<h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-											<Stethoscope
-												className="h-4 w-4 text-blue-600"
-												aria-hidden
-											/>{" "}
-											AI analysis
-											<span className="ml-auto text-xs font-normal text-slate-500">
-												confidence {Math.round(analysis.confidence * 100)}%
-											</span>
-										</h2>
-										<p className="mt-2 text-sm text-slate-700">
-											{analysis.summary}
-										</p>
-									</section>
-								</div>
-								<ClinicalReportView
-									patient={patient}
-									analysis={analysis}
-									onVerify={verify}
-									onApply={apply}
-								/>
-							</>
-						)}
-					</div>
 				</div>
 			</main>
 		</div>
@@ -696,7 +614,6 @@ export default function PatientPage({
 }) {
 	const { id } = use(params);
 	const entry = ROSTER.find((r) => r.id === id);
-	const name = entry?.name ?? "patient";
 	if (entry && !entry.live)
 		return (
 			<div className="flex min-h-screen bg-slate-50 text-slate-900">
@@ -729,9 +646,5 @@ export default function PatientPage({
 				</main>
 			</div>
 		);
-	return (
-		<SecureGate patientName={name}>
-			<PatientCockpit params={params} />
-		</SecureGate>
-	);
+	return <PatientCockpit params={params} />;
 }

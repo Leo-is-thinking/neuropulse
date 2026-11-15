@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NeuroPulse <-> Vexo band bridge.
+"""99% <-> Vexo band bridge.
 
 Band -> backend : wrist accel -> tremor frequency (Goertzel 3-8 Hz) -> POST /api/live-event
 Backend -> band : POST http://127.0.0.1:8765/actuate  (set VEXO_WEBHOOK_URL to that)
@@ -67,11 +67,17 @@ def dominant(samples, fs):
 
 # ---------- backend ----------
 def post(api, path, body):
-    req = urllib.request.Request(api + path, json.dumps(body).encode(), {"Content-Type": "application/json"})
-    try:
-        urllib.request.urlopen(req, timeout=3).read()
-    except Exception as e:  # backend down must never kill the bridge
-        print("  [api]", path, "failed:", e)
+    data = json.dumps(body).encode()
+    for attempt in range(3):  # Next dev can fail a request while it recompiles: retry before giving up
+        try:
+            req = urllib.request.Request(api + path, data, {"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=10).read()
+            return
+        except Exception as e:  # backend down must never kill the bridge
+            if attempt == 2:
+                print("  [api]", path, "failed:", e)
+            else:
+                time.sleep(0.5)
 
 
 class State:

@@ -21,3 +21,6 @@ __pycache__/
 # runtime state
 .data/
 bridge/.steps_baseline.json
+
+# Local Netlify folder
+.netlify

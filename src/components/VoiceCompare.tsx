@@ -91,7 +91,7 @@ function Rhythm({ s, playing }: { s: VoiceSample; playing: boolean }) {
 					/>
 				);
 			})}
-			{playing && (
+			{playing && !s.clip && (
 				<line x1="0" x2="0" y1="0" y2="64" stroke="#0f172a" strokeWidth="2">
 					<animate
 						attributeName="x1"
@@ -122,10 +122,13 @@ export default function VoiceCompare({ recent }: { recent: VoiceSample }) {
 	const ref = earlier.find((s) => s.id === refId) ?? earlier[0];
 	const [playingId, setPlayingId] = useState<string | null>(null);
 	const ctxRef = useRef<AudioContext | null>(null);
+	const audioRef = useRef<HTMLAudioElement | null>(null);
 	const timer = useRef(0);
 
 	const stop = useCallback(() => {
 		clearTimeout(timer.current);
+		audioRef.current?.pause();
+		audioRef.current = null;
 		ctxRef.current?.close();
 		ctxRef.current = null;
 		setPlayingId(null);
@@ -134,10 +137,18 @@ export default function VoiceCompare({ recent }: { recent: VoiceSample }) {
 
 	const play = (s: VoiceSample) => {
 		stop();
+		setPlayingId(s.id);
+		if (s.clip) {
+			const a = new Audio(`/voices/${s.clip}.wav`);
+			audioRef.current = a;
+			a.onended = stop;
+			a.onerror = stop;
+			a.play().catch(stop);
+			return;
+		}
 		const ctx = new AudioContext();
 		ctxRef.current = ctx;
 		synth(ctx, s);
-		setPlayingId(s.id);
 		timer.current = window.setTimeout(stop, (WINDOW_S + 0.3) * 1000);
 	};
 
@@ -230,7 +241,9 @@ export default function VoiceCompare({ recent }: { recent: VoiceSample }) {
 			</div>
 			<p className="text-xs text-slate-500">
 				Sentences differ on purpose: the measures use rhythm and volume, not the
-				words. Playback is rebuilt from those measures, not the raw voice.
+				words. Audio is a synthetic voice degraded to match the measured
+				slowing, flattening, fading and pauses; the live band recordings below
+				are the real thing.
 			</p>
 
 			<ul className="space-y-1.5 border-t border-slate-100 pt-4 text-sm text-slate-700">

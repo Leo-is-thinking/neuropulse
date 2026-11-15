@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import os
-"""Proof that every NeuroPulse live algorithm works on synthetic band signals.
+"""Proof that every 99% live algorithm works on synthetic band signals.
 
   python3 bridge/selftest.py                      unit proofs, no server needed
   python3 bridge/selftest.py --api http://localhost:3000   + end-to-end: posts to the backend, checks Live cells,
@@ -138,7 +138,14 @@ _sp = os.path.join(_tf.mkdtemp(), "b.json")
 _a = MobilityTracker(state_path=_sp); _a.on_steps(1000); _a.on_steps(1300)
 _b = MobilityTracker(state_path=_sp)  # bridge restart
 check("steps survive a bridge restart (300, not 0)", _b.on_steps(1300) == 300, str(_b.steps_today))
-check("band counter reset -> restart from 0 (no negative)", MobilityTracker(state_path=_sp).on_steps(50) == 0)
+_c = MobilityTracker(state_path=_sp)
+check("band counter reset -> day total stays 300 (banked), never drops", _c.on_steps(50) == 300, str(_c.steps_today))
+check("steps keep stacking after the reset (300 + 10)", _c.on_steps(60) == 310, str(_c.steps_today))
+check("day total survives yet another restart", MobilityTracker(state_path=_sp).on_steps(60) == 310)
+_m = MotionAnalyzer(fs=50, offset=(100, 25, 0))
+for i in range(120):
+    _m.feed(i / 50, 0, 0, 1.0 + 0.2 * math.sin(2 * math.pi * 5 * i / 50))
+check("tremor burden stacks on earlier-today totals (offset 25/100)", _m.totals[0] >= 100 and _m.totals[1] >= 25, str(_m.totals))
 mt2 = MobilityTracker(); m2 = 0
 for s in range(0, 600): m2 = mt2.on_link(s, -62)
 check("home RSSI -62 dBm = 0 outdoor", m2 == 0)

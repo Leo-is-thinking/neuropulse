@@ -1,4 +1,4 @@
-# Vexo band → NeuroPulse (live)
+# Vexo band → 99% (live)
 
 One-time: `python3 -m pip install bleak` (done on this Mac). `.env.local` already points `VEXO_WEBHOOK_URL` to the bridge.
 

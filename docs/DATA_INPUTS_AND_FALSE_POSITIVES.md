@@ -1,4 +1,4 @@
-# NeuroPulse — Wristband Data Inputs & Anti-False-Positive Matrix
+# 99% — Wristband Data Inputs & Anti-False-Positive Matrix
 
 ## 1. Data inputs & retained clinical metrics
 

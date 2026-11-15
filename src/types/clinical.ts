@@ -1,4 +1,4 @@
-// Shared contracts for NeuroPulse. Owner: Terminal 1. Other terminals import only.
+// Shared contracts for 99%. Owner: Terminal 1. Other terminals import only.
 
 export type StreamId =
 	| "voice"
@@ -138,7 +138,11 @@ export type LiveEventType =
 	/** generic metric sample: needs `metric` + numeric `value` (any key of METRICS) */
 	| "sample"
 	/** adherence verification signal: `signal` */
-	| "adherence";
+	| "adherence"
+	/** bridge link heartbeat: `state` connected | disconnected */
+	| "band_status"
+	/** one spoken phrase with its rate, transcript and audio clip */
+	| "voice_episode";
 
 export type AdherenceSignal =
 	| "led_haptic_cue"
@@ -174,6 +178,39 @@ export interface TremorEpisode {
 	roll: number;
 	gravity: [number, number, number];
 	kind: string;
+	/** Raw band IMU around the episode, for the 3D replay. Absent on episodes recorded before capture existed. */
+	imu?: ImuRecording | null;
+	/** Band activity when the episode ended: still, walk, run (from the step counter). */
+	activity?: string;
+	/** Set by the list endpoint, which leaves the raw IMU out: fetch ?id= to get it. */
+	hasImu?: boolean;
+}
+
+/** Raw wrist IMU clip. Band frame: x along the forearm toward the hand, y across the wrist, z out of the back of the wrist. */
+export interface ImuRecording {
+	/** Sample rate, Hz. */
+	fs: number;
+	/** ISO time of the first sample. */
+	t0: string;
+	/** One row per sample: ax ay az (g, gravity included), gx gy gz (degrees/second). */
+	s: number[][];
+}
+
+export interface VoiceEpisode {
+	id?: string;
+	start: string;
+	end: string;
+	/** words per minute over this phrase */
+	wpm: number;
+	words: number;
+	secs: number;
+	/** true when the rate is under the slow-speech threshold */
+	slow: boolean;
+	text: string;
+	/** relative mic loudness during the phrase, dB re full scale (band mic, not calibrated SPL) */
+	db_avg?: number | null;
+	db_peak?: number | null;
+	hasAudio?: boolean;
 }
 
 export interface LiveEventInput {

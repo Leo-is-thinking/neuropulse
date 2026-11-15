@@ -5,6 +5,7 @@ import {
 	ArrowDownRight,
 	ArrowRight,
 	ArrowUpRight,
+	Box,
 	Footprints,
 	HeartPulse,
 	type LucideIcon,
@@ -14,6 +15,7 @@ import {
 	Pill,
 	Scale,
 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flagFor, METRICS } from "@/data/patientsSeed";
 import {
@@ -809,6 +811,19 @@ export default function StreamPanels({
 								</h3>
 								<p className="text-xs text-slate-500">{s.sub}</p>
 							</div>
+							{(s.id === "tremor" || s.id === "voice") && (
+								<Link
+									href={`/modelization?patient=${patient.id}#${patient.id === "armel" ? (s.id === "tremor" ? "m-live" : "m-live-voice") : s.id === "tremor" ? "m-tremor" : "m-voice"}`}
+									className="group ml-auto inline-flex shrink-0 items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white shadow-md shadow-blue-600/30 ring-1 ring-blue-700/20 transition hover:-translate-y-0.5 hover:bg-blue-700 hover:shadow-lg hover:shadow-blue-600/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+								>
+									<Box className="h-4 w-4" aria-hidden />
+									View modelization{" "}
+									<ArrowRight
+										className="h-4 w-4 transition-transform group-hover:translate-x-0.5"
+										aria-hidden
+									/>
+								</Link>
+							)}
 						</header>
 
 						<div className="grid gap-6 px-5 py-5 lg:grid-cols-[320px_1fr]">

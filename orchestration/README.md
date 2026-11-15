@@ -1,4 +1,4 @@
-# NeuroPulse — Orchestration Hub
+# 99% — Orchestration Hub
 
 Single source of truth for the 4 Claude terminals. **Read this folder before every work session. Update `STATUS.md` after every milestone.**
 

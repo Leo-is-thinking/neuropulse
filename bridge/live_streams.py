@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NeuroPulse live pipeline: Vexo band -> algos.py -> POST /api/live-event -> dashboard Live column.
+"""99% live pipeline: Vexo band -> algos.py -> POST /api/live-event -> dashboard Live column.
 
 Wires EVERY metric (see algos.py) and the closed-loop adherence verifier. Reuses bridge.py for the
 LED/voice actuation server (POST http://127.0.0.1:8765/actuate).
@@ -13,13 +13,17 @@ Honest sources:
   REAL  : tremor, dyskinesia, falls, steps, nocturia, outdoor (RSSI), verbal engagement + acoustic tags (--mic), adherence gesture
   SIM   : heart rate / HRV / extrasystoles (band has no PPG) via --fake-hr ; speech rate (needs STT) via --fake-voice
 """
-import argparse, datetime, math, os, random, sys, threading, time
+import argparse, collections, datetime, math, os, random, sys, threading, time
 
 import bridge as B  # LED/voice actuation server + band connect (same folder)
 from algos import (AcousticTagger, AdherenceVerifier, FallDetector, MobilityTracker, MotionAnalyzer,
                    NocturiaCounter, TremorEpisodes, VoiceMeter)
 
 RATE = 50
+IMU_PRE_S = 2.0   # raw accel+gyro kept before an episode starts, for the 3D replay
+SLOW_WPM = 100    # a phrase under this rate is a "slow speech" episode
+CLIP_MAX_S = 10.0  # longest audio clip kept per phrase
+IMU_MAX_S = 12.0  # longest raw clip attached to one episode (12 s x 50 Hz = 600 samples)
 
 
 def main():
@@ -87,12 +91,39 @@ def main():
 
     # ---- algorithms ----
     epi = TremorEpisodes()
-    mot, fall, mob = MotionAnalyzer(fs=RATE), FallDetector(fs=RATE), MobilityTracker(state_path=None if (a.sim or a.scenario) else os.path.join(os.path.dirname(os.path.abspath(__file__)), ".steps_baseline.json"))
+    state_path = None if (a.sim or a.scenario) else os.path.join(os.path.dirname(os.path.abspath(__file__)), ".steps_baseline.json")
+    mob = MobilityTracker(state_path=state_path)
+    day = mob._load() if state_path else {}  # today's totals survive a bridge restart
+    mot, fall = MotionAnalyzer(fs=RATE, offset=tuple(day.get("motion", (0, 0, 0)))), FallDetector(fs=RATE)
+
+    def save_motion():
+        if not state_path:
+            return
+        import json
+        try:
+            d = mob._load()
+            d["date"] = datetime.date.today().isoformat()
+            d["motion"] = list(mot.totals)
+            json.dump(d, open(state_path, "w"))
+        except OSError:
+            pass
     noc = NocturiaCounter(night=lambda h: True) if a.night else NocturiaCounter()
     voice, acou, adh = VoiceMeter(), AcousticTagger(), AdherenceVerifier()
     st = {"rest": (0.0, 0.0, 1.0), "burden": 0.0, "recent": 0.0, "state": "still", "steps": 0, "armed_t": None, "judged": False}
 
-    def on_motion(t, ax, ay, az):
+    raw = collections.deque(maxlen=int(RATE * 60))  # (t, ax, ay, az, gx, gy, gz): last 60 s, raw IMU for the replay
+
+    def imu_clip(t_start, t_end):
+        """Raw accel (g) + gyro (deg/s) from IMU_PRE_S before the episode to its end, capped at IMU_MAX_S."""
+        lo = max(t_start - IMU_PRE_S, t_end - IMU_MAX_S)
+        rows = [r for r in list(raw) if lo <= r[0] <= t_end]
+        if len(rows) < RATE:
+            return None
+        return dict(fs=RATE, t0=datetime.datetime.fromtimestamp(rows[0][0]).astimezone().isoformat(),
+                    s=[[round(v, 4) if i < 3 else round(v, 2) for i, v in enumerate(r[1:])] for r in rows])
+
+    def on_motion(t, ax, ay, az, gx=None, gy=None, gz=None):
+        raw.append((t, ax, ay, az, gx or 0.0, gy or 0.0, gz or 0.0))
         st["rest"] = st["rest"] if adh.armed_at is not None else (ax, ay, az)
         r = mot.feed(t, ax, ay, az, walking=st["state"] in ("walk", "run"))
         f = fall.feed(t, ax, ay, az)
@@ -108,7 +139,10 @@ def main():
             ep = epi.feed(t, r)
             if ep:
                 print(f"  [episode] {ep['kind']}  {ep['hz']} Hz  {ep['amp']} g  {ep['end'] - ep['start']:.0f} s  pitch {ep['pitch']:.0f} roll {ep['roll']:.0f}")
-                post(dict(type="tremor_episode", episode=dict(ep, start=datetime.datetime.fromtimestamp(ep["start"]).astimezone().isoformat(), end=datetime.datetime.fromtimestamp(ep["end"]).astimezone().isoformat())))
+                clip = imu_clip(ep["start"], ep["end"])
+                post(dict(type="tremor_episode", episode=dict(ep, imu=clip, activity=st["state"], start=datetime.datetime.fromtimestamp(ep["start"]).astimezone().isoformat(), end=datetime.datetime.fromtimestamp(ep["end"]).astimezone().isoformat())))
+            if every("save_motion", 10):
+                save_motion()
             st["burden"] = r["tremor_burden"]
             st["recent"] = mot.recent_burden(t)
             post(dict(type="tremor", value=round(r["hz"], 1) if r["tremor"] else 0.0, amplitude=round(r["amp"], 3) if r["tremor"] else 0.0))
@@ -138,7 +172,18 @@ def main():
         if every("outdoor", 2):
             post(dict(type="sample", metric="outdoor_time", value=mins))
 
+    lvl = collections.deque(maxlen=600)  # (t, mic level 0..1) last 60 s, for per-phrase loudness
+
+    def phrase_db(t0, t1):
+        """Relative loudness of a phrase from the band's mic level (0..1 -> dB re full scale). Not calibrated SPL."""
+        v = sorted(l for (t, l) in list(lvl) if t0 <= t <= t1 and l >= 0.02)
+        if len(v) < 3:
+            return None, None
+        db = lambda x: round(20 * math.log10(max(x, 1e-3)), 1)
+        return db(sum(v) / len(v)), db(v[-1])
+
     def on_level(t, level):
+        lvl.append((t, level))
         eng = voice.on_level(t, level)
         if every("engagement", 2):
             post(dict(type="sample", metric="verbal_engagement", value=eng))
@@ -146,12 +191,34 @@ def main():
         if tag:
             print(f"  [acoustic] {tag}")
             post(dict(type="acoustic", tag=tag))
-        if a.fake_voice is False:
+        if a.fake_voice is False and not a.stt:
             sr = voice.speech_rate(time.time())
             if sr is not None and every("speech", 2):
                 post(dict(type="voice", value=sr))
 
+    stop_req = threading.Event()
+    st_started = [time.time()]
+
+    def blink_blue(n):
+        """n short blue blinks on the band LED (start = 1, stop = 2)."""
+        try:
+            for _ in range(n):
+                band.set_led("#0000ff"); time.sleep(0.35)
+                band.led_off(); time.sleep(0.35)
+        except Exception as ex:
+            print(f"  [led] blink failed: {str(ex)[:60]}")
+
     def on_double_tap(_e=None):
+        if band is not None and not a.scenario:  # real band: double-tap = STOP
+            if time.time() - st_started[0] < 15:  # wake-up tap can be replayed right after connect
+                print("  [tap] ignored (just started)")
+                return
+            print("  [tap] double-tap on band = stop requested")
+            import subprocess
+            subprocess.Popen(["afplay", "-v", "4", os.path.join(os.path.dirname(os.path.abspath(__file__)), "sounds", "close.wav")])  # falling jingle = closing
+            post(dict(type="band_status", state="disconnected"))  # site flips to "disconnected" at once
+            stop_req.set()
+            return
         print("  [tap] double-tap = water-sound stand-in")
         post(dict(type="acoustic", tag="Pill_Water", context="double_tap_confirm"))
         for sig in adh.on_water(time.time()):
@@ -175,10 +242,13 @@ def main():
         band = B.Band.connect(a.number or 72, "sim" if a.sim else ("serial" if a.usb else "ble"))
         B.State.band = band
         print("Connected to", band.name)
-        band.on("motion", lambda m: on_motion(time.time(), m.ax, m.ay, m.az))
+        post(dict(type="band_status", state="connected"))
+        blink_blue(1)  # 1 blue blink = started
+        st_started[0] = time.time()
+        band.on("motion", lambda m: on_motion(time.time(), m.ax, m.ay, m.az, m.gx, m.gy, m.gz))
         band.on("activity", on_activity)
         band.on("double-tap", on_double_tap)
-        cfg = dict(motion=RATE, sensors="accel", events=True, activity=True)
+        cfg = dict(motion=RATE, sensors="both", events=True, activity=True)  # gyro needed for the 3D replay
         if not a.usb and not a.sim:
             cfg["link"] = True
         band.configure(**cfg)
@@ -189,6 +259,9 @@ def main():
             sys.path.insert(0, os.path.join(B.KIT, "examples", "python"))
             import speech  # vexo-open-kit/examples/python/speech.py
 
+            import ogg_opus
+            ring = collections.deque(maxlen=int(50 * 40))  # last 40 s of band Opus packets (t, bytes)
+
             class TimedDeepgram(speech.DeepgramSpeech):
                 """Also reads Deepgram's word timestamps: rate = words / seconds actually spoken."""
                 def _message(self, m):
@@ -196,7 +269,23 @@ def main():
                         w = [x for x in ((m.get("channel", {}).get("alternatives") or [{}])[0].get("words") or [])
                              if x.get("confidence", 1) >= 0.6]
                         if len(w) >= 3:
-                            voice.add_spoken(time.time(), len(w), w[-1]["end"] - w[0]["start"])
+                            secs = w[-1]["end"] - w[0]["start"]
+                            voice.add_spoken(time.time(), len(w), secs)
+                            if len(w) >= 4 and secs >= 1.0:  # one point per phrase: slow and fast moments stay visible
+                                wpm = round(len(w) * 60 / secs)
+                                print(f"  [speech-rate] {wpm} words/min ({len(w)} words in {secs:.1f} s)")
+                                post(dict(type="voice", value=wpm))
+                                now = time.time()
+                                lo = now - min(CLIP_MAX_S, secs + 2.5)
+                                pk = [b for (t, b) in list(ring) if t >= lo]
+                                txt = " ".join(x.get("punctuated_word") or x.get("word", "") for x in w)
+                                iso = lambda t: datetime.datetime.fromtimestamp(t).astimezone().isoformat()
+                                dba, dbp = phrase_db(now - secs - 1.0, now)
+                                post(dict(type="voice_episode", episode=dict(
+                                    db_avg=dba, db_peak=dbp,
+                                    start=iso(now - secs), end=iso(now), wpm=wpm, words=len(w),
+                                    secs=round(secs, 1), slow=wpm < SLOW_WPM, text=txt,
+                                    ogg=ogg_opus.b64(pk) if len(pk) >= 25 else None)))
                     super()._message(m)
 
             cur = {"ears": None}
@@ -213,6 +302,7 @@ def main():
             def feed_audio(ev):
                 e = cur["ears"]
                 if e is not None:
+                    ring.append((time.time(), bytes(ev.opus)))
                     try:
                         e.feed(ev.opus, ev.seq)
                     except Exception:
@@ -267,12 +357,22 @@ def main():
 
     print("Running. Ctrl+C to stop.")
     try:
-        while True:
-            time.sleep(1)
+        while not stop_req.is_set():
+            if every("link-hb", 2):
+                post(dict(type="band_status", state="connected"))  # heartbeat: site shows "band connected"
+            stop_req.wait(0.1)
     except KeyboardInterrupt:
         pass
+    B.post(a.api, "/api/live-event", {"patientId": a.patient, "type": "band_status", "state": "disconnected", "source": source})
     if band is not None and not a.scenario:
+        try:
+            band.configure(audio=False, mic_level=0)  # release the blue mic lock
+        except Exception:
+            pass
+        if stop_req.is_set():
+            blink_blue(2)  # 2 blue blinks = stopped
         band.disconnect()
+        print("Stopped.")
 
 
 def run_check(a):
@@ -345,8 +445,11 @@ def scenario_tuesday(on_motion, on_level, on_double_tap, post):
         now = time.time()
         z = 1.0 + rnd.gauss(0, 0.003)
         ax = 0.0
+        gx = gy = gz = 0.0
         if 10 <= t < 35:
-            z += 0.10 * math.sin(2 * math.pi * 5.3 * t)
+            w = 2 * math.pi * 5.3 * t
+            z += 0.10 * math.sin(w)
+            gx, gy, gz = 55 * math.cos(w), 30 * math.cos(w + 0.6), 8 * math.cos(w + 1.2)  # pronation-supination dominant
         if 70 <= t < 74:  # forearm lifts to mouth for 4 s
             ang = math.radians(75)
             ax, z = math.sin(ang), math.cos(ang)
@@ -356,7 +459,7 @@ def scenario_tuesday(on_motion, on_level, on_double_tap, post):
             z = 0.15
         elif 16.12 <= t < 16.16:
             z = 2.0
-        on_motion(now, ax, 0.0, z)
+        on_motion(now, ax, 0.0, z, gx, gy, gz)
         if int(t * 10) != int((t - dt) * 10):  # 10 Hz mic level
             lv = 0.02
             glass = [0.95, 0.5, 0.12]

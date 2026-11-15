@@ -1,7 +1,7 @@
-# NeuroPulse — Terminal 1 Brief (Backend, Data Schema, 7-Day Dataset & API Routes)
+# 99% — Terminal 1 Brief (Backend, Data Schema, 7-Day Dataset & API Routes)
 
 ## Project
-NeuroPulse — Closed-Loop "Zero-UI" Clinical OS for Parkinson's Disease (VexoHack YC).
+99% — Closed-Loop "Zero-UI" Clinical OS for Parkinson's Disease (VexoHack YC).
 - Language: all UI text, medical metrics, logs, and AI outputs in ENGLISH.
 - Stack: Next.js (App Router), TypeScript, Tailwind CSS, Lucide-React.
 

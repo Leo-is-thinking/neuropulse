@@ -1,8 +1,8 @@
-# NeuroPulse
+# 99%
 
 Closed-loop clinical cockpit for **Parkinson's and Alzheimer's** follow-up, built around the **Vexo Open band**.
 
-The band streams wrist motion, microphone and light data. NeuroPulse turns these streams into clinical signals (tremor, dyskinesia, speech, sleep, falls), cross-checks them against the medication schedule, produces an AI-assisted synthesis for the clinician, and closes the loop by sending a nudge back to the patient's wrist.
+The band streams wrist motion, microphone and light data. 99% turns these streams into clinical signals (tremor, dyskinesia, speech, sleep, falls), cross-checks them against the medication schedule, produces an AI-assisted synthesis for the clinician, and closes the loop by sending a nudge back to the patient's wrist.
 
 > Hackathon submission. Demo patient: **Henri M., 74** (`henri-m`), Parkinson's, wearing-off pattern. A second patient, **Armel**, is the live-band page fed in real time by the physical band.
 
@@ -12,7 +12,8 @@ The band streams wrist motion, microphone and light data. NeuroPulse turns these
 2. **Detect** – on-device algorithms (`bridge/algos.py`): resting tremor (4–6 Hz), dyskinesia, walking, speech rate (Deepgram), with persistence gating and false-positive filters (e.g. toothbrushing is rejected).
 3. **Analyse** – `/api/analyze` correlates events with the levodopa schedule. Gemini if a key is set, otherwise a deterministic fallback engine (reproducible demo, no network needed).
 4. **Act** – recommendations (e.g. shift the 17:00 dose to 18:00, add a morning walk) generate a prescription and trigger the wrist: LED double blink + ElevenLabs voice cue.
-5. **Verify** – the loop re-checks the next dose (hand-to-mouth gesture, water sound, post-dose tremor drop).
+5. **Model** – the *Modelization* page (`/modelization`, `?patient=armel` for live data) replays tremor episodes in 3D from the band's own motion and compares voice recordings over time (speech rate, silence share, volume, fade) with key takeaways for the clinician.
+6. **Verify** – the loop re-checks the next dose (hand-to-mouth gesture, water sound, post-dose tremor drop).
 
 ## Quick start
 
@@ -41,7 +42,13 @@ python3 bridge/live_streams.py --scenario tuesday --clock 16:34 --fake-hr --api 
 4. Stream: `python3 bridge/live_streams.py 72 --api http://localhost:3000 [--mic] [--stt]`
 5. Open the live patient page: values refresh every 2 s.
 
+**One-command demo**: `./demo.sh` starts the site and a watcher on the band. Double-tap the band to start the live stack (rising jingle, blue LED blink), double-tap again to stop (falling jingle). The patient page shows a "Bracelet connected / disconnected" badge. `bridge/start-band.sh [stop|status|logs]` restarts site + bridge + Deepgram speech rate in one go.
+
 More options (USB, calibration, flags): [`bridge/README.md`](bridge/README.md).
+
+### Voice clips (Henri M.)
+
+Henri's voice samples are simulated: `scripts/gen_voices.py` generates `public/voices/*.wav` with Deepgram Aura TTS, then degrades them progressively (slower, longer pauses, quieter, fading within a sentence) to mimic hypophonia. Regenerate with `DEEPGRAM_API_KEY=... python3 scripts/gen_voices.py` (needs `numpy`). Armel's voice data is real (band microphone + Deepgram).
 
 ## Environment variables
 
@@ -52,7 +59,7 @@ See [`.env.example`](.env.example). Without keys, every engine falls back to det
 | `GEMINI_API_KEY`, `GEMINI_MODEL` | AI clinical synthesis |
 | `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` | Voice cue on the laptop |
 | `VEXO_WEBHOOK_URL`, `VEXO_WEBHOOK_TOKEN` | Actuation webhook served by the bridge |
-| `DEEPGRAM_API_KEY` | Band microphone speech-to-text (bridge `--stt`) |
+| `DEEPGRAM_API_KEY` | Band microphone speech-to-text (bridge `--stt`), voice clip generation |
 
 ## Repository layout
 
@@ -64,8 +71,8 @@ src/                  Next.js 15 app (TypeScript, Tailwind 4, three.js)
   lib/                stores, bridge client
   types/clinical.ts   shared data contract
 bridge/               Python bridge: band -> API (BLE/USB), algorithms, selftest
-scripts/              Node launcher for the bridge
-public/               static assets
+scripts/              Node launcher for the bridge, voice clip generator
+public/               static assets, simulated voice clips (voices/)
 docs/                 data inputs, false-positive handling, work briefs
 orchestration/        team coordination: ownership, contracts, demo canon, status
 vexo-open-kit/        vendored Vexo Open kit (MIT, unmodified) used by the bridge

@@ -9,11 +9,15 @@ import {
 	Settings,
 	Users,
 } from "lucide-react";
-import { Sora } from "next/font/google";
+import { Space_Grotesk } from "next/font/google";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const wordmark = Sora({ subsets: ["latin"], weight: ["600"], display: "swap" });
+const wordmark = Space_Grotesk({
+	subsets: ["latin"],
+	weight: ["600"],
+	display: "swap",
+});
 
 const NAV: { label: string; icon: typeof Users; href?: string }[] = [
 	{ label: "My patients", icon: Users, href: "/" },
@@ -25,27 +29,21 @@ const NAV: { label: string; icon: typeof Users; href?: string }[] = [
 	{ label: "Invoices", icon: Receipt },
 ];
 
-/** Neuron-like node with a pulse wave running through it. No box. */
+const DOTS = Array.from({ length: 100 }, (_, i) => i);
+
+/** 100 dots: 99 blue = the time we capture, 1 black = the visit the clinician sees today. */
 function Logo() {
 	return (
-		<svg width="30" height="30" viewBox="0 0 32 32" fill="none" aria-hidden>
-			<circle
-				cx="16"
-				cy="16"
-				r="13"
-				stroke="#2563eb"
-				strokeWidth="2"
-				strokeDasharray="62 20"
-				strokeLinecap="round"
-				transform="rotate(-70 16 16)"
-			/>
-			<path
-				d="M3 17h6l3-8 4.5 14 3.5-9 2 3h7"
-				stroke="#2563eb"
-				strokeWidth="2.2"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			/>
+		<svg width="30" height="30" viewBox="0 0 30 30" aria-hidden>
+			{DOTS.map((i) => (
+				<circle
+					key={i}
+					cx={1.5 + (i % 10) * 3}
+					cy={1.5 + Math.floor(i / 10) * 3}
+					r={1.15}
+					fill={i === 9 ? "#0f172a" : "#2563eb"}
+				/>
+			))}
 		</svg>
 	);
 }
@@ -56,14 +54,14 @@ export function AppSidebar() {
 		<aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-slate-200 bg-white md:flex">
 			<Link
 				href="/"
-				aria-label="NeuroPulse home"
+				aria-label="99% home"
 				className="flex items-center gap-2.5 px-6 py-6 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
 			>
 				<Logo />
 				<span
-					className={`${wordmark.className} text-[19px] tracking-tight text-blue-600`}
+					className={`${wordmark.className} text-[21px] leading-none tracking-[-0.04em] text-slate-900`}
 				>
-					NeuroPulse
+					ninety-nine<span className="text-blue-600">%</span>
 				</span>
 			</Link>
 

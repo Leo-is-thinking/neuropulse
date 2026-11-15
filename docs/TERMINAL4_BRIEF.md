@@ -1,4 +1,4 @@
-# NeuroPulse — Terminal 4 Brief (AI Entanglement Visualizer, Clinical Report & Closed-Loop Prescription/Sync UI)
+# 99% — Terminal 4 Brief (AI Entanglement Visualizer, Clinical Report & Closed-Loop Prescription/Sync UI)
 
 (Global context: see `TERMINAL1_BRIEF.md`.)
 

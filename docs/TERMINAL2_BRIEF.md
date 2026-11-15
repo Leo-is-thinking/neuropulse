@@ -1,4 +1,4 @@
-# NeuroPulse — Terminal 2 Brief (Vexo Wristband Hardware Bridge, Audio/Haptic Actuation & Live Demo Controls)
+# 99% — Terminal 2 Brief (Vexo Wristband Hardware Bridge, Audio/Haptic Actuation & Live Demo Controls)
 
 (Global context: see `TERMINAL1_BRIEF.md`.)
 

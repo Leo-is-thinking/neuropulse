@@ -1,4 +1,4 @@
-"""Pure, hardware-free algorithms: Vexo band signals -> NeuroPulse metrics.
+"""Pure, hardware-free algorithms: Vexo band signals -> 99% metrics.
 
 Every class takes timestamps `t` (seconds) from the caller, so the same code runs on the real band,
 the simulator and in tests. No I/O here. See selftest.py for the proof of each algorithm.
@@ -44,8 +44,9 @@ class MotionAnalyzer:
     dyskinesia_idx : 0-10, 10 x fraction of awake windows that are dyskinetic
     """
 
-    def __init__(self, fs=50, win_s=2.0, hop_s=1.0, min_amp=0.04, dysk_amp=0.15, still_std=0.01, horizon_s=600,
-                 tremor_persist=4, dysk_persist=4, tremor_lo=3.5, tremor_hi=12.0):
+    def __init__(self, fs=50, win_s=2.0, hop_s=1.0, min_amp=0.04, dysk_amp=0.15, still_std=0.01, horizon_s=86400,
+                 tremor_persist=4, dysk_persist=4, tremor_lo=3.5, tremor_hi=12.0, offset=(0, 0, 0)):
+        self.off = list(offset)  # (awake, tremor, dysk) windows already counted earlier today
         self.t_lo, self.t_hi = tremor_lo, tremor_hi
         self.fs, self.win, self.hop = fs, int(fs * win_s), int(fs * hop_s)
         # a window only counts as tremor/dyskinesia after N consecutive candidate windows (~N s): kills one-off gestures
@@ -55,6 +56,7 @@ class MotionAnalyzer:
         self.vec = deque(maxlen=self.win)
         self.run_hz = 0.0
         self.hist = deque()  # (t, awake, tremor, dysk)
+        self.totals = tuple(self.off)
 
     def feed(self, t, ax, ay, az, walking=False):
         """walking=True (band activity says walk/run): step harmonics are not tremor, voluntary arm swing is not dyskinesia."""
@@ -96,11 +98,14 @@ class MotionAnalyzer:
                 h[idx] = True
         while self.hist and self.hist[0][0] < t - self.horizon:
             self.hist.popleft()
-        a = sum(1 for h in self.hist if h[1]) or 0
+        a = sum(1 for h in self.hist if h[1]) + self.off[0]
+        tt = sum(1 for h in self.hist if h[2]) + self.off[1]
+        dd = sum(1 for h in self.hist if h[3]) + self.off[2]
+        self.totals = (a, tt, dd)
         return {
             "hz": hz, "amp": amp, "grav": tuple(sum(c[i] for c in self.vec) / len(self.vec) for i in range(3)), "tremor": tremor, "dysk": dysk, "awake": awake,
-            "tremor_burden": round(100 * sum(1 for h in self.hist if h[2]) / a, 1) if a else 0.0,
-            "dyskinesia_index": round(10 * sum(1 for h in self.hist if h[3]) / a, 1) if a else 0.0,
+            "tremor_burden": round(100 * tt / a, 1) if a else 0.0,
+            "dyskinesia_index": round(10 * dd / a, 1) if a else 0.0,
         }
 
 
@@ -280,30 +285,51 @@ class MobilityTracker:
         self.away, self.confirm = away_dbm, confirm_s
         self.state_path = state_path  # keeps the day's starting counter across bridge restarts
         self.first_steps = None
+        self.carry, self.last_life = 0, None
         self.steps_today = 0
         self.away_since = None
         self.outdoor_s = 0.0
         self.last_t = None
         self.is_away = False
 
-    def on_steps(self, lifetime):
+    def _load(self):
         import datetime, json
-        today = datetime.date.today().isoformat()
-        if self.first_steps is None and self.state_path:
-            try:
-                d = json.load(open(self.state_path))
-                if d.get("date") == today and d.get("first", 0) <= lifetime:
-                    self.first_steps = d["first"]
-            except (OSError, ValueError, KeyError):
-                pass
-        if self.first_steps is None or lifetime < self.first_steps:  # first reading, or band counter was reset
+        try:
+            d = json.load(open(self.state_path))
+            if d.get("date") == datetime.date.today().isoformat():
+                return d
+        except (OSError, ValueError):
+            pass
+        return {}
+
+    def _save(self):
+        import datetime, json
+        if not self.state_path:
+            return
+        try:
+            d = self._load()
+            d.update(date=datetime.date.today().isoformat(), first=self.first_steps, carry=self.carry, last=self.last_life)
+            json.dump(d, open(self.state_path, "w"))
+        except OSError:
+            pass
+
+    def on_steps(self, lifetime):
+        """Steps today = carry + (lifetime - first). The band counter can restart (reboot / reconnect): then what was
+        counted so far is carried over, so the day only ever goes up."""
+        if self.first_steps is None:
+            d = self._load() if self.state_path else {}
+            self.first_steps, self.carry, self.last_life = d.get("first"), d.get("carry", 0), d.get("last")
+            if self.first_steps is None:
+                self.first_steps = lifetime
+            if self.last_life is None:
+                self.last_life = lifetime
+        if lifetime < self.last_life:  # counter went back: bank the steps counted so far
+            self.carry += max(0, self.last_life - self.first_steps)
             self.first_steps = lifetime
-            if self.state_path:
-                try:
-                    json.dump({"date": today, "first": lifetime}, open(self.state_path, "w"))
-                except OSError:
-                    pass
-        self.steps_today = max(0, lifetime - self.first_steps)
+        if lifetime != self.last_life or self.steps_today == 0:
+            self.last_life = lifetime
+            self.steps_today = self.carry + max(0, lifetime - self.first_steps)
+            self._save()
         return self.steps_today
 
     def on_link(self, t, rssi):
