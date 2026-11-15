@@ -28,7 +28,8 @@ export function tremorComments(
 		}`,
 		`Wrist pitch **${e.pitch}°**, roll **${e.roll}°**, measured from gravity.`,
 	];
-	if (posture) out.push(`Body: **${posture.posture}**. ${posture.why}.`);
+	if (posture)
+		out.push(`Body: **${posture.posture.replace("_", " ")}**. ${posture.why}.`);
 	if (e.activity === "walk" || e.activity === "run")
 		out.push("The band counted steps during this episode.");
 	else

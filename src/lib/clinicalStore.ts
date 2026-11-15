@@ -242,7 +242,9 @@ export const clinicalStore = {
 				if (typeof input.value !== "number")
 					return { error: "value_required_rate" };
 				const c = setNum("voice", "speech_rate", input.value)!;
-				if (input.value <= 84) {
+				if (input.value < 100) c.flag = "alert";
+				else if (input.value < 115) c.flag = "warn";
+				if (input.value < 100) {
 					event = {
 						...base,
 						stream: "voice",

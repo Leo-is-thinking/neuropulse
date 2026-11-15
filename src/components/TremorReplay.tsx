@@ -71,7 +71,10 @@ export default function TremorReplay({
 	const [speed, setSpeed] = useState<(typeof SPEEDS)[number]>(1);
 	const [gain, setGain] = useState<(typeof GAINS)[number]>(3);
 	const [view, setView] = useState<ModelView>("muscles");
-	const [side, setSide] = useState<"left" | "right">("right");
+	// the live band is worn on the left wrist (axes calibrated 2026-11-14, see bridge/algos.py band_to_arm)
+	const [side, setSide] = useState<"left" | "right">(
+		fromBand ? "left" : "right",
+	);
 	const [profile, setProfile] = useState<ArmProfile>(
 		episode ? ARMELLE : GENERIC_ELDER,
 	);
@@ -282,7 +285,7 @@ export default function TremorReplay({
 						</p>
 						<p className="mt-1.5 max-w-[22rem] text-xs leading-snug text-slate-300">
 							<span className="font-semibold capitalize text-white">
-								{posture}
+								{posture.replace("_", " ")}
 							</span>
 							{postureSel === "auto"
 								? ` · estimated: ${guess.why}`
@@ -522,6 +525,7 @@ export default function TremorReplay({
 					<option value="seated">seated</option>
 					<option value="standing">standing</option>
 					<option value="walking">walking</option>
+					<option value="behind_back">hand behind back</option>
 				</select>
 				<fieldset
 					className="inline-flex rounded-lg border border-slate-700 p-0.5 m-0 min-w-0"

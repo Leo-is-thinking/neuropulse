@@ -718,7 +718,7 @@ export default function StreamPanels({
 			<section aria-labelledby="overview-h">
 				<h2
 					id="overview-h"
-					className="mb-3 text-base font-semibold text-slate-900"
+					className="mb-4 text-2xl font-bold tracking-tight text-blue-900"
 				>
 					Health signals this week
 				</h2>
@@ -806,7 +806,7 @@ export default function StreamPanels({
 								<Icon className="h-4 w-4" aria-hidden />
 							</span>
 							<div className="leading-tight">
-								<h3 className="text-sm font-semibold text-slate-900">
+								<h3 className="text-2xl font-bold tracking-tight text-blue-900">
 									{s.title}
 								</h3>
 								<p className="text-xs text-slate-500">{s.sub}</p>

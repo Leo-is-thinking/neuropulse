@@ -45,7 +45,7 @@ class MotionAnalyzer:
     """
 
     def __init__(self, fs=50, win_s=2.0, hop_s=1.0, min_amp=0.04, dysk_amp=0.15, still_std=0.01, horizon_s=86400,
-                 tremor_persist=4, dysk_persist=4, tremor_lo=3.5, tremor_hi=12.0, offset=(0, 0, 0)):
+                 tremor_persist=4, dysk_persist=4, tremor_lo=3.0, tremor_hi=14.0, offset=(0, 0, 0)):
         self.off = list(offset)  # (awake, tremor, dysk) windows already counted earlier today
         self.t_lo, self.t_hi = tremor_lo, tremor_hi
         self.fs, self.win, self.hop = fs, int(fs * win_s), int(fs * hop_s)
@@ -53,6 +53,7 @@ class MotionAnalyzer:
         self.tp, self.dp, self.t_run, self.d_run = tremor_persist, dysk_persist, 0, 0
         self.min_amp, self.dysk_amp, self.still_std, self.horizon = min_amp, dysk_amp, still_std, horizon_s
         self.buf, self.since = deque(maxlen=self.win), 0
+        self.miss, self.run_big = 0, False
         self.vec = deque(maxlen=self.win)
         self.run_hz = 0.0
         self.hist = deque()  # (t, awake, tremor, dysk)
@@ -78,23 +79,35 @@ class MotionAnalyzer:
         xm = [v - mean for v in x]
         vol = max(2 * goertzel(xm, self.fs, f / 10) for f in range(5, 26, 2))
         steady = self._steady_posture()  # forearm not rotating: scratching, drinking, brushing, reaching all rotate it
-        cand_t = (awake and not walking and steady and self.t_lo <= hz <= self.t_hi and amp >= self.min_amp
-                  and peak_share >= 0.35 and amp >= 0.5 * vol)
-        if cand_t and self.t_run and abs(hz - self.run_hz) > 0.8:
+        # clean periodic shake (one sharp peak, real amplitude): the band's activity classifier calls it "walk", it is not
+        strong = steady and self.t_lo <= hz <= self.t_hi and amp >= 0.15 and peak_share >= 0.6 and amp >= vol
+        if strong:
+            walking = False
+        loud = amp >= 0.4 and peak_share >= 0.25  # a violent, periodic shake: the arm moves with it, posture check does not apply
+        cand_t = (awake and not walking and (steady or loud) and self.t_lo <= hz <= self.t_hi and amp >= self.min_amp
+                  and peak_share >= (0.25 if amp >= 0.25 else 0.35) and amp >= 0.5 * vol)
+        if cand_t and self.t_run and abs(hz - self.run_hz) > 8.0:
             self.t_run = 0  # frequency wandered: a real rest tremor is steady, a scratch is not
         if cand_t and self.t_run == 0:
             self.run_hz = hz
         cand_d = awake and not walking and steady and not cand_t and std * math.sqrt(2) >= self.dysk_amp and peak_share < 0.35
         self.why = dict(hz=round(hz, 2), amp=round(amp, 3), share=round(peak_share, 2), vol=round(vol, 3), std=round(std, 3),
-                        steady=steady, walking=walking, awake=awake, cand_t=cand_t, run=self.t_run)
-        self.t_run = self.t_run + 1 if cand_t else 0
+                        steady=steady, strong=strong, walking=walking, awake=awake, cand_t=cand_t, run=self.t_run)
+        if cand_t:
+            self.run_big = (self.run_big if self.t_run else True) and amp >= 0.25  # every window of the run was a strong shake
+            self.t_run, self.miss = self.t_run + 1, 0
+        elif self.t_run > 0 and self.miss < 1:  # one weak window inside a shake does not break it
+            self.miss += 1
+        else:
+            self.t_run, self.miss = 0, 0
         self.d_run = self.d_run + 1 if cand_d else 0
-        tremor, dysk = self.t_run >= self.tp, self.d_run >= self.dp
+        need = self.tp - 1 if self.run_big else self.tp  # a clear, strong shake is confirmed 1 s sooner
+        tremor, dysk = self.t_run >= need, self.d_run >= self.dp
         self.hist.append([t, awake, tremor, dysk])
         # back-fill: the run that just got confirmed also counts for its earlier windows
-        if self.t_run == self.tp or self.d_run == self.dp:
-            idx = 2 if self.t_run == self.tp else 3
-            for h in list(self.hist)[-self.tp:]:
+        if self.t_run == need or self.d_run == self.dp:
+            idx = 2 if self.t_run == need else 3
+            for h in list(self.hist)[-need:]:
                 h[idx] = True
         while self.hist and self.hist[0][0] < t - self.horizon:
             self.hist.popleft()
@@ -125,6 +138,14 @@ class MotionAnalyzer:
         return round(100 * sum(1 for x in h if x[2]) / len(h), 1) if h else 0.0
 
 
+def band_to_arm(x, y, z):
+    """Vexo band axes -> forearm frame used by the app (x toward the hand, y across the wrist toward the ulna,
+    z out of the back of the wrist). Measured on Armel's wrist (calibration 2026-11-14, band on the LEFT wrist):
+    arm hanging reads +1 g on band +y (so +y points to the elbow), thumb up reads +1 g on band +x (thumb side),
+    palm down reads +1 g on band -z (back of the wrist). Proper rotation, so it works for accel and gyro."""
+    return (-y, -x, -z)
+
+
 class TremorEpisodes:
     """Groups confirmed tremor windows into episodes (start..end) with frequency, amplitude and wrist orientation.
 
@@ -132,7 +153,7 @@ class TremorEpisodes:
     in the band frame (standard accelerometer convention), so different postures give different numbers.
     """
 
-    def __init__(self, gap=3, min_windows=3):
+    def __init__(self, gap=3, min_windows=2):
         self.gap, self.min_w = gap, min_windows
         self.cur, self.quiet = [], 0
 
@@ -142,7 +163,7 @@ class TremorEpisodes:
             return "slow 3.5-4 Hz"
         if hz <= 6.2:
             return "rest-like 4-6 Hz"
-        return "fast 6-12 Hz"
+        return "fast 6-14 Hz"
 
     def feed(self, t, r):
         if r is None:
@@ -166,14 +187,14 @@ class TremorEpisodes:
             return None
         hz = sorted(x[1] for x in c)
         amp = [x[2] for x in c]
-        g = [sum(x[3][i] for x in c) / len(c) for i in range(3)]
+        g = band_to_arm(*(sum(x[3][i] for x in c) / len(c) for i in range(3)))
         n = math.sqrt(sum(v * v for v in g)) or 1e-9
         gx, gy, gz = (v / n for v in g)
         mhz = hz[len(hz) // 2]
         return dict(start=c[0][0] - 3.0, end=c[-1][0] + 1.0, windows=len(c), hz=round(mhz, 1),
                     hz_min=round(hz[0], 1), hz_max=round(hz[-1], 1),
                     amp=round(sum(amp) / len(amp), 3), amp_peak=round(max(amp), 3),
-                    pitch=round(math.degrees(math.atan2(-gx, math.sqrt(gy * gy + gz * gz))), 0),
+                    pitch=round(math.degrees(math.atan2(gx, math.sqrt(gy * gy + gz * gz))), 0),  # + = hand up
                     roll=round(math.degrees(math.atan2(gy, gz)), 0),
                     gravity=[round(gx, 2), round(gy, 2), round(gz, 2)], kind=self.kind(mhz))
 

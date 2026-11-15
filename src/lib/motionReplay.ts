@@ -503,59 +503,72 @@ export function amplified(f: ReplayFrame, gain: number): Quat {
 }
 
 // ---------- posture of the whole body (inferred, the band only sees the forearm) ----------
-export type Posture = "seated" | "standing" | "walking";
+export type Posture = "seated" | "standing" | "walking" | "behind_back";
 export interface PostureGuess {
 	posture: Posture;
 	/** Where the forearm is: hanging along the body, resting (lap / armrest / table), raised toward the face. */
 	forearm: "hanging" | "resting" | "raised";
 	/** Forearm pitch at the strongest moment, degrees (+ = hand up). */
 	pitch: number;
+	/** How the back of the wrist faces: up = palm down (wrist flat), side = edge-on, down = palm up. */
+	palm: "down" | "side" | "up";
 	why: string;
 }
 
 /**
- * Body posture from the forearm angle and the band's activity. Walking comes from the step counter (measured);
- * seated vs standing is a guess from the forearm angle (a rest tremor mostly happens with the forearm resting).
+ * Body posture from the forearm angle, wrist rotation and the band's activity. Walking comes from the step counter
+ * (measured). The rest is a guess from the gravity direction in the band frame (no compass, no camera):
+ *  - forearm level + palm down        -> standing, wrist flat
+ *  - forearm hanging                  -> standing, arm along the body
+ *  - forearm 22-50° below level + thumb up -> hand held behind the back (calibrated: -27° to -35°, a thumb-up
+ *    forearm held in front sits near -16°; no compass, so these two only differ by that angle)
+ *  - forearm raised                   -> standing with the hand toward the face
+ * Seated can only be picked by hand.
  */
 export function inferPosture(r: Replay, activity?: string): PostureGuess {
 	const f = frameAt(r, r.peakT);
 	const fwd = qrot(f.qSlow, [1, 0, 0]);
+	const dorsal = qrot(f.qSlow, [0, 0, 1]);
 	const pitch = Math.round(
 		(Math.asin(Math.max(-1, Math.min(1, fwd[2]))) * 180) / Math.PI,
 	);
+	const up = dorsal[2];
+	const palm = up > 0.6 ? "down" : up < -0.6 ? "up" : "side";
 	const forearm = pitch < -50 ? "hanging" : pitch > 35 ? "raised" : "resting";
+	const base = { forearm, pitch, palm } as const;
 	if (activity === "walk" || activity === "run")
 		return {
+			...base,
 			posture: "walking",
-			forearm,
-			pitch,
 			why: `steps counted by the band · forearm ${pitch}°`,
 		};
 	if (forearm === "hanging")
 		return {
+			...base,
 			posture: "standing",
-			forearm,
-			pitch,
-			why: `forearm hanging (${pitch}°), no steps: standing or arm down`,
+			why: `forearm hanging (${pitch}°), no steps: standing, arm down`,
 		};
-	if (pitch > 70)
+	if (forearm === "resting" && palm === "side" && pitch < -22)
 		return {
-			posture: "standing",
-			forearm,
-			pitch,
-			why: `arm raised overhead (${pitch}°), no steps: standing with the arm up`,
+			...base,
+			posture: "behind_back",
+			why: `forearm ${pitch}°, back of wrist edge-on: hand held behind the back`,
 		};
 	if (forearm === "raised")
 		return {
-			posture: "seated",
-			forearm,
-			pitch,
-			why: `forearm raised (${pitch}°): hand toward the face, likely seated`,
+			...base,
+			posture: "standing",
+			why: `forearm raised (${pitch}°): standing, hand toward the face`,
+		};
+	if (palm === "side")
+		return {
+			...base,
+			posture: "standing",
+			why: `forearm in front (${pitch}°), thumb up, no steps: standing`,
 		};
 	return {
-		posture: "seated",
-		forearm,
-		pitch,
-		why: `forearm near horizontal (${pitch}°), no steps: likely seated, forearm resting`,
+		...base,
+		posture: "standing",
+		why: `forearm level (${pitch}°), palm ${palm}, no steps: standing, wrist ${palm === "down" ? "flat" : "turned"}`,
 	};
 }

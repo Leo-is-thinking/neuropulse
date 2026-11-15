@@ -76,6 +76,10 @@ export function AppSidebar() {
 							? "bg-blue-50 text-blue-700"
 							: "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
 					}`;
+					const to =
+						href === "/modelization" && path.startsWith("/patient/armel")
+							? "/modelization?patient=armel"
+							: href;
 					const inner = (
 						<>
 							<Icon className="h-[18px] w-[18px]" />
@@ -85,7 +89,7 @@ export function AppSidebar() {
 					return href ? (
 						<Link
 							key={label}
-							href={href}
+							href={to ?? "/"}
 							aria-current={active ? "page" : undefined}
 							className={cls}
 						>

@@ -16,7 +16,7 @@ Honest sources:
 import argparse, collections, datetime, math, os, random, sys, threading, time
 
 import bridge as B  # LED/voice actuation server + band connect (same folder)
-from algos import (AcousticTagger, AdherenceVerifier, FallDetector, MobilityTracker, MotionAnalyzer,
+from algos import (band_to_arm, AcousticTagger, AdherenceVerifier, FallDetector, MobilityTracker, MotionAnalyzer,
                    NocturiaCounter, TremorEpisodes, VoiceMeter)
 
 RATE = 50
@@ -74,7 +74,17 @@ def main():
 
     threading.Thread(target=worker, daemon=True).start()
 
+    voice_flush = [None]
+    shake_until = [0.0]
+    shake = {"last": 0, "ign": 0}
+    live = [True]  # double-tap flips this: ON = data flows to the site, OFF = band stays connected but silent
+
     def post(body):
+        if body.get("type") == "band_status":  # status bypasses the event queue: instant, never stuck behind a backlog
+            threading.Thread(target=B.post, args=(a.api, "/api/live-event", {"patientId": a.patient, "ts": sim_now().isoformat(), "source": source, **body}), daemon=True).start()
+            return
+        if not live[0]:
+            return
         try:
             q.put_nowait({"patientId": a.patient, "ts": sim_now().isoformat(), "source": source, **body})
         except queue.Full:
@@ -111,6 +121,8 @@ def main():
     voice, acou, adh = VoiceMeter(), AcousticTagger(), AdherenceVerifier()
     st = {"rest": (0.0, 0.0, 1.0), "burden": 0.0, "recent": 0.0, "state": "still", "steps": 0, "armed_t": None, "judged": False}
 
+    imu_log = open("/tmp/neuropulse_imu.csv", "a", buffering=1)  # raw accel kept so detector tuning can be replayed offline
+    dev = collections.deque(maxlen=int(RATE * 8))  # (t, |accel|-1g): was the wrist calm before a double-tap?
     raw = collections.deque(maxlen=int(RATE * 60))  # (t, ax, ay, az, gx, gy, gz): last 60 s, raw IMU for the replay
 
     def imu_clip(t_start, t_end):
@@ -120,12 +132,21 @@ def main():
         if len(rows) < RATE:
             return None
         return dict(fs=RATE, t0=datetime.datetime.fromtimestamp(rows[0][0]).astimezone().isoformat(),
-                    s=[[round(v, 4) if i < 3 else round(v, 2) for i, v in enumerate(r[1:])] for r in rows])
+                    s=[[round(v, 4) for v in band_to_arm(*r[1:4])] + [round(v, 2) for v in band_to_arm(*r[4:7])] for r in rows])
+
+    def post_episode(ep):
+        clip = imu_clip(ep["start"], ep["end"])
+        post(dict(type="tremor_episode", episode=dict(ep, imu=clip, activity=st["state"], start=datetime.datetime.fromtimestamp(ep["start"]).astimezone().isoformat(), end=datetime.datetime.fromtimestamp(ep["end"]).astimezone().isoformat())))
 
     def on_motion(t, ax, ay, az, gx=None, gy=None, gz=None):
         raw.append((t, ax, ay, az, gx or 0.0, gy or 0.0, gz or 0.0))
+        dev.append((t, abs(math.sqrt(ax * ax + ay * ay + az * az) - 1.0)))
+        imu_log.write(f"{t:.3f},{ax:.4f},{ay:.4f},{az:.4f}\n")
         st["rest"] = st["rest"] if adh.armed_at is not None else (ax, ay, az)
         r = mot.feed(t, ax, ay, az, walking=st["state"] in ("walk", "run"))
+        w_ = getattr(mot, "why", None) or {}
+        if w_.get("strong") or w_.get("cand_t"):
+            shake_until[0] = t + 6.0  # steps the band counts while the wrist shakes are not walking
         f = fall.feed(t, ax, ay, az)
         if f:
             print(f"  [balance] {f}")
@@ -139,8 +160,7 @@ def main():
             ep = epi.feed(t, r)
             if ep:
                 print(f"  [episode] {ep['kind']}  {ep['hz']} Hz  {ep['amp']} g  {ep['end'] - ep['start']:.0f} s  pitch {ep['pitch']:.0f} roll {ep['roll']:.0f}")
-                clip = imu_clip(ep["start"], ep["end"])
-                post(dict(type="tremor_episode", episode=dict(ep, imu=clip, activity=st["state"], start=datetime.datetime.fromtimestamp(ep["start"]).astimezone().isoformat(), end=datetime.datetime.fromtimestamp(ep["end"]).astimezone().isoformat())))
+                post_episode(ep)
             if every("save_motion", 10):
                 save_motion()
             st["burden"] = r["tremor_burden"]
@@ -159,7 +179,10 @@ def main():
 
     def on_activity(e):
         st["state"], st["steps"] = e.state, e.steps
-        day = mob.on_steps(e.steps)
+        if time.time() < shake_until[0] and e.steps > shake["last"]:
+            shake["ign"] += e.steps - shake["last"]
+        shake["last"] = e.steps
+        day = mob.on_steps(e.steps - shake["ign"])
         h = sim_now().hour
         if noc.feed(time.time(), h, e.state, e.steps):
             print("  [sleep] bathroom trip", noc.trips)
@@ -208,16 +231,41 @@ def main():
         except Exception as ex:
             print(f"  [led] blink failed: {str(ex)[:60]}")
 
+    snd = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sounds")
+    last_tap = [0.0]
+
+    def announce(on):
+        import subprocess
+        jingle = os.path.join(snd, "open.wav" if on else "close.wav")
+        words = "Band connected" if on else "Band disconnected"
+        subprocess.Popen(["sh", "-c", f'afplay -v 4 "{jingle}"; say -v Samantha "{words}"'])
+
+    def set_live(on, why):
+        if live[0] and not on:  # freeze: save the phrase and the tremor episode in progress before going silent
+            if voice_flush[0]:
+                voice_flush[0](True)
+            ep = epi._close() if epi.cur else None
+            epi.cur, epi.quiet = [], 0
+            if ep:
+                print(f"  [episode] saved at stop: {ep['kind']} {ep['hz']} Hz pitch {ep['pitch']:.0f} roll {ep['roll']:.0f}")
+                post_episode(ep)
+        live[0] = on
+        if on and cleared[0]:  # first ON after Clear data: steps walked while OFF do not count
+            cleared[0] = False
+            reset_counters()
+        print(f"  [{why}] live {'ON' if on else 'OFF'}")
+        announce(on)
+        post(dict(type="band_status", state="connected" if on else "disconnected"))  # site flips at once
+        if band is not None and not a.mic:  # mic on locks the LED blue: the voice is the feedback then
+            threading.Thread(target=blink_blue, args=(1 if on else 2,), daemon=True).start()
+
     def on_double_tap(_e=None):
-        if band is not None and not a.scenario:  # real band: double-tap = STOP
-            if time.time() - st_started[0] < 15:  # wake-up tap can be replayed right after connect
-                print("  [tap] ignored (just started)")
+        if band is not None and not a.scenario:  # real band: double-tap = instant ON/OFF toggle, link stays up
+            n = time.time()
+            if n - st_started[0] < 3 or n - last_tap[0] < 1.5:  # wake-up tap replayed at connect / bounce
                 return
-            print("  [tap] double-tap on band = stop requested")
-            import subprocess
-            subprocess.Popen(["afplay", "-v", "4", os.path.join(os.path.dirname(os.path.abspath(__file__)), "sounds", "close.wav")])  # falling jingle = closing
-            post(dict(type="band_status", state="disconnected"))  # site flips to "disconnected" at once
-            stop_req.set()
+            last_tap[0] = n
+            set_live(not live[0], "tap")
             return
         print("  [tap] double-tap = water-sound stand-in")
         post(dict(type="acoustic", tag="Pill_Water", context="double_tap_confirm"))
@@ -234,6 +282,33 @@ def main():
         print(f"  [adherence] armed: cue sent, gesture + water + tremor drop to be verified (judge in {a.drop_after:g}s, pre-burden {st['burden']}%)")
 
     B.actuate = actuate_and_arm
+
+    def reset_counters():
+        """Site 'Clear data' button: zero the day's counters so steps/tremor restart from 0."""
+        mot.off = [0, 0, 0]; mot.hist.clear(); mot.totals = (0, 0, 0)
+        mob.first_steps, mob.carry, mob.steps_today, mob.outdoor_s = mob.last_life, 0, 0, 0.0
+        if hasattr(noc, "trips"):
+            noc.trips = 0
+        if state_path:
+            try:
+                os.remove(state_path)
+            except OSError:
+                pass
+            mob._save()
+        print("  [reset] counters at zero")
+
+    cleared = [False]
+
+    def on_clear():
+        """Site 'Clear data': zero counters, band goes OFF (disconnected). Next double-tap = ON, starts from zero."""
+        reset_counters()
+        cleared[0] = True
+        live[0] = False
+        post(dict(type="band_status", state="disconnected"))
+        print("  [reset] live OFF: press Start on the site (or double-tap) to start from zero")
+
+    B.State.on_reset = on_clear
+    B.State.on_live = lambda on: set_live(on, "site")
     B.serve(a.port)
 
     # ---- sources ----
@@ -243,6 +318,7 @@ def main():
         B.State.band = band
         print("Connected to", band.name)
         post(dict(type="band_status", state="connected"))
+        announce(True)
         blink_blue(1)  # 1 blue blink = started
         st_started[0] = time.time()
         band.on("motion", lambda m: on_motion(time.time(), m.ax, m.ay, m.az, m.gx, m.gy, m.gz))
@@ -259,33 +335,58 @@ def main():
             sys.path.insert(0, os.path.join(B.KIT, "examples", "python"))
             import speech  # vexo-open-kit/examples/python/speech.py
 
-            import ogg_opus
+            import importlib.util as _ilu  # bridge/ogg_opus.py (has b64), not the kit's copy of the same name
+            _sp = _ilu.spec_from_file_location("np_ogg_opus", os.path.join(os.path.dirname(os.path.abspath(__file__)), "ogg_opus.py"))
+            ogg_opus = _ilu.module_from_spec(_sp)
+            _sp.loader.exec_module(ogg_opus)
             ring = collections.deque(maxlen=int(50 * 40))  # last 40 s of band Opus packets (t, bytes)
+
+            vb = {"w": [], "t": 0.0}
+
+            def emit_phrase(w, secs):
+                """One point per phrase: slow and fast moments stay visible (assessed within seconds)."""
+                voice.add_spoken(time.time(), len(w), secs)
+                wpm = round(len(w) * 60 / secs)
+                print(f"  [speech-rate] {wpm} words/min ({len(w)} words in {secs:.1f} s)")
+                post(dict(type="voice", value=wpm))
+                now = time.time()
+                lo = now - min(CLIP_MAX_S, secs + 2.5)
+                pk = [b for (t, b) in list(ring) if t >= lo]
+                txt = " ".join(x.get("punctuated_word") or x.get("word", "") for x in w)
+                iso = lambda t: datetime.datetime.fromtimestamp(t).astimezone().isoformat()
+                dba, dbp = phrase_db(now - secs - 1.0, now)
+                post(dict(type="voice_episode", episode=dict(
+                    db_avg=dba, db_peak=dbp,
+                    start=iso(now - secs), end=iso(now), wpm=wpm, words=len(w),
+                    secs=round(secs, 1), slow=wpm < SLOW_WPM, text=txt,
+                    ogg=ogg_opus.b64(pk) if len(pk) >= 25 else None)))
+
+            def flush_voice(force=False):
+                """No new words for 2.5 s (or force = stop): judge what was said so far (3+ words)."""
+                w = vb["w"]
+                if len(w) >= 3 and (force or time.time() - vb["t"] >= 2.5):
+                    vb["w"] = []
+                    secs = max(w[-1]["end"] - w[0]["start"], 1.0)
+                    emit_phrase(w, secs)
+
+            voice_flush[0] = flush_voice
 
             class TimedDeepgram(speech.DeepgramSpeech):
                 """Also reads Deepgram's word timestamps: rate = words / seconds actually spoken."""
                 def _message(self, m):
                     if m.get("type") == "Results" and m.get("is_final"):
-                        w = [x for x in ((m.get("channel", {}).get("alternatives") or [{}])[0].get("words") or [])
-                             if x.get("confidence", 1) >= 0.6]
-                        if len(w) >= 3:
-                            secs = w[-1]["end"] - w[0]["start"]
-                            voice.add_spoken(time.time(), len(w), secs)
-                            if len(w) >= 4 and secs >= 1.0:  # one point per phrase: slow and fast moments stay visible
-                                wpm = round(len(w) * 60 / secs)
-                                print(f"  [speech-rate] {wpm} words/min ({len(w)} words in {secs:.1f} s)")
-                                post(dict(type="voice", value=wpm))
-                                now = time.time()
-                                lo = now - min(CLIP_MAX_S, secs + 2.5)
-                                pk = [b for (t, b) in list(ring) if t >= lo]
-                                txt = " ".join(x.get("punctuated_word") or x.get("word", "") for x in w)
-                                iso = lambda t: datetime.datetime.fromtimestamp(t).astimezone().isoformat()
-                                dba, dbp = phrase_db(now - secs - 1.0, now)
-                                post(dict(type="voice_episode", episode=dict(
-                                    db_avg=dba, db_peak=dbp,
-                                    start=iso(now - secs), end=iso(now), wpm=wpm, words=len(w),
-                                    secs=round(secs, 1), slow=wpm < SLOW_WPM, text=txt,
-                                    ogg=ogg_opus.b64(pk) if len(pk) >= 25 else None)))
+                        raw_w = [x for x in ((m.get("channel", {}).get("alternatives") or [{}])[0].get("words") or [])
+                                 if x.get("confidence", 1) >= 0.5]
+                        nowt = time.time()
+                        if nowt - vb["t"] > 5:  # long silence: new phrase
+                            vb["w"] = []
+                        vb["t"] = nowt
+                        vb["w"] += raw_w  # slow speech = finals of 1-2 words: gather them until there are enough
+                        w = vb["w"]
+                        secs = (w[-1]["end"] - w[0]["start"]) if w else 0
+                        if len(w) >= 3 and secs >= 1.0 and (len(w) >= 6 or secs >= 4):
+                            vb["w"] = []
+                            emit_phrase(w, secs)
                     super()._message(m)
 
             cur = {"ears": None}
@@ -301,7 +402,7 @@ def main():
 
             def feed_audio(ev):
                 e = cur["ears"]
-                if e is not None:
+                if e is not None and live[0]:  # OFF = no audio leaves the laptop
                     ring.append((time.time(), bytes(ev.opus)))
                     try:
                         e.feed(ev.opus, ev.seq)
@@ -358,8 +459,10 @@ def main():
     print("Running. Ctrl+C to stop.")
     try:
         while not stop_req.is_set():
+            if voice_flush[0]:
+                voice_flush[0]()
             if every("link-hb", 2):
-                post(dict(type="band_status", state="connected"))  # heartbeat: site shows "band connected"
+                post(dict(type="band_status", state="connected" if live[0] else "disconnected"))  # heartbeat
             stop_req.wait(0.1)
     except KeyboardInterrupt:
         pass

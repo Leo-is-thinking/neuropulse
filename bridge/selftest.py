@@ -171,10 +171,10 @@ def run_episodes(hz, amp, grav, secs=12):
         ep = e.feed(t, r)
         if ep: out.append(ep)
     return out
-e5 = run_episodes(5.0, 0.12, (0, 0, 1))
-e8 = run_episodes(8.0, 0.12, (1, 0, 0))
+e5 = run_episodes(5.0, 0.12, (0, 0, -1))  # band -z up: wrist flat, palm down
+e8 = run_episodes(8.0, 0.12, (0, 1, 0))  # band +y up: arm hanging
 check("5 Hz shake, forearm flat -> one rest-like episode", len(e5) == 1 and e5[0]["kind"] == "rest-like 4-6 Hz" and 4.6 <= e5[0]["hz"] <= 5.4, str(e5[:1]))
-check("8 Hz shake, other posture -> one fast episode", len(e8) == 1 and e8[0]["kind"] == "fast 6-12 Hz" and 7.4 <= e8[0]["hz"] <= 8.6, str(e8[:1]))
+check("8 Hz shake, other posture -> one fast episode", len(e8) == 1 and e8[0]["kind"] == "fast 6-14 Hz" and 7.4 <= e8[0]["hz"] <= 8.6, str(e8[:1]))
 check("episodes differ in orientation (pitch)", len(e5) == 1 and len(e8) == 1 and abs(e5[0]["pitch"] - e8[0]["pitch"]) > 45, f"{e5[0]['pitch'] if e5 else None} vs {e8[0]['pitch'] if e8 else None}")
 
 # 6 acoustic -----------------------------------------------------------------

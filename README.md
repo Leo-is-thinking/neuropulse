@@ -4,12 +4,14 @@ Closed-loop clinical cockpit for **Parkinson's and Alzheimer's** follow-up, buil
 
 The band streams wrist motion, microphone and light data. 99% turns these streams into clinical signals (tremor, dyskinesia, speech, sleep, falls), cross-checks them against the medication schedule, produces an AI-assisted synthesis for the clinician, and closes the loop by sending a nudge back to the patient's wrist.
 
+**Live demo (simulated data, no hardware needed): <https://neuropulse-demo.netlify.app>** · Pitch and submission text: [`docs/SUBMISSION.md`](docs/SUBMISSION.md)
+
 > Hackathon submission. Demo patient: **Henri M., 74** (`henri-m`), Parkinson's, wearing-off pattern. A second patient, **Armel**, is the live-band page fed in real time by the physical band.
 
 ## What it does
 
 1. **Capture** – a Python bridge reads the band over Bluetooth (or USB) and posts typed events to the web app.
-2. **Detect** – on-device algorithms (`bridge/algos.py`): resting tremor (4–6 Hz), dyskinesia, walking, speech rate (Deepgram), with persistence gating and false-positive filters (e.g. toothbrushing is rejected).
+2. **Detect** – on-device algorithms (`bridge/algos.py`): resting tremor (3–14 Hz incl. strong shakes), dyskinesia, posture (seated / standing / walking / hand behind back), walking, speech rate (Deepgram), with persistence gating and false-positive filters (e.g. toothbrushing is rejected).
 3. **Analyse** – `/api/analyze` correlates events with the levodopa schedule. Gemini if a key is set, otherwise a deterministic fallback engine (reproducible demo, no network needed).
 4. **Act** – recommendations (e.g. shift the 17:00 dose to 18:00, add a morning walk) generate a prescription and trigger the wrist: LED double blink + ElevenLabs voice cue.
 5. **Model** – the *Modelization* page (`/modelization`, `?patient=armel` for live data) replays tremor episodes in 3D from the band's own motion and compares voice recordings over time (speech rate, silence share, volume, fade) with key takeaways for the clinician.
@@ -42,7 +44,7 @@ python3 bridge/live_streams.py --scenario tuesday --clock 16:34 --fake-hr --api 
 4. Stream: `python3 bridge/live_streams.py 72 --api http://localhost:3000 [--mic] [--stt]`
 5. Open the live patient page: values refresh every 2 s.
 
-**One-command demo**: `./demo.sh` starts the site and a watcher on the band. Double-tap the band to start the live stack (rising jingle, blue LED blink), double-tap again to stop (falling jingle). The patient page shows a "Bracelet connected / disconnected" badge. `bridge/start-band.sh [stop|status|logs]` restarts site + bridge + Deepgram speech rate in one go.
+**One-command demo**: `./demo.sh` starts the site and a watcher on the band. Start/stop live data from the **patient page button** or by double-tapping the band (rising/falling jingle, blue LED blink; arm-motion false taps are rejected). The patient page shows a "Bracelet connected / disconnected" badge. When live stops, in-progress phrases and tremor episodes are frozen and stay replayable in Modelization. A slow-speech alert fires under 100 words/min. `bridge/start-band.sh [stop|status|logs]` restarts site + bridge + Deepgram speech rate in one go.
 
 More options (USB, calibration, flags): [`bridge/README.md`](bridge/README.md).
 

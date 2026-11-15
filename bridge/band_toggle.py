@@ -9,7 +9,7 @@ import asyncio, os, subprocess, sys, time, urllib.request
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 NUM = sys.argv[1] if len(sys.argv) > 1 else "72"
 NAME = f"Vexo-HACK-{NUM}"
-COOLDOWN = 75  # band keeps advertising ~60 s after the stop tap: do not relaunch on it
+COOLDOWN = 3  # bridge stays connected; it only exits on Ctrl+C or a lost link
 
 
 def load_env():
@@ -75,11 +75,11 @@ def main():
             print(f"[toggle] scan error: {str(ex)[:80]}")
             time.sleep(3)
             continue
-        beep("open")  # rising jingle = opening
+        pass  # bridge announces "Band connected" once linked
         print("[toggle] band seen -> starting")
         ensure_site()
         p = subprocess.run([sys.executable, "-u", os.path.join(ROOT, "bridge", "live_streams.py"), NUM,
-                            "--api", "http://localhost:3000", "--stt"], cwd=ROOT)
+                            "--api", "http://localhost:3000", "--stt"] + (["--debug-motion"] if os.environ.get("NP_DEBUG") else []), cwd=ROOT)
         print(f"[toggle] bridge ended (code {p.returncode}). Cooldown {COOLDOWN}s.")
         time.sleep(COOLDOWN)
         print("[toggle] ready again.")

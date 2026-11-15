@@ -287,6 +287,7 @@ export default function ForearmModel({
 			new THREE.Vector3(x * kH, y * kH, z * kH);
 		const seated = posture === "seated";
 		const walking = posture === "walking";
+		const behind = posture === "behind_back";
 		const hipY = seated ? 4.8 : 8.7;
 		const lift = hipY - 8.7; // seated body = standing upper body moved down
 		const shoulderY = 13.6 + lift;
@@ -454,14 +455,18 @@ export default function ForearmModel({
 		const dir = new THREE.Vector3();
 		const uArm = new THREE.Vector3();
 		/** Heading is unknown (no compass): forearm assumed pointing forward, turned a little toward the body midline. */
-		const inward = new THREE.Quaternion().setFromAxisAngle(UP, s * 0.22);
+		// hand behind the back: forearm turned across the lower back, upper arm swung back
+		const inward = new THREE.Quaternion().setFromAxisAngle(
+			UP,
+			behind ? s * 1.6 : s * 0.22,
+		);
 		const placeArm = () => {
 			dir.set(1, 0, 0).applyQuaternion(forearm.quaternion);
 			// upper arm hangs from the shoulder, swung toward where the forearm points (elbow never hyperextends)
 			uArm
 				.copy(DOWN)
 				.addScaledVector(dir, 0.32)
-				.addScaledVector(FWD, 0.08)
+				.addScaledVector(FWD, behind ? -0.55 : 0.08)
 				.normalize();
 			elbowPos.copy(shoulder).addScaledVector(uArm, upperLen);
 			forearm.position.copy(elbowPos);

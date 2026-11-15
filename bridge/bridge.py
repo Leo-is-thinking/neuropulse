@@ -83,6 +83,8 @@ def post(api, path, body):
 class State:
     band = None
     mic = False
+    on_reset = None  # set by live_streams: zero the day's counters, live OFF
+    on_live = None  # set by live_streams: live ON/OFF from the site
     lock = threading.Lock()
 
 
@@ -114,11 +116,18 @@ def actuate(cmd):
 def serve(port):
     class H(BaseHTTPRequestHandler):
         def do_POST(self):
-            if self.path != "/actuate":
+            if self.path not in ("/actuate", "/reset", "/live"):
                 self.send_response(404); self.end_headers(); return
             try:
                 cmd = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
-                actuate(cmd)
+                if self.path == "/reset":
+                    if State.on_reset:
+                        State.on_reset()
+                elif self.path == "/live":
+                    if State.on_live:
+                        State.on_live(bool(cmd.get("on")))
+                else:
+                    actuate(cmd)
                 code, out = 200, {"ok": True}
             except Exception as e:
                 code, out = 500, {"ok": False, "error": str(e)}

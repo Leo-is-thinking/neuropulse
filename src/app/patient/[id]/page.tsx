@@ -15,7 +15,6 @@ import {
 import Link from "next/link";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { AppSidebar } from "@/components/AppSidebar";
-import LiveTremorEpisodes from "@/components/LiveTremorEpisodes";
 import { VERIFY_CELL_EVENT } from "@/components/RawDataTables";
 import StreamPanels from "@/components/StreamPanels";
 import { CHECKUPS } from "@/data/checkups";
@@ -150,7 +149,7 @@ function MedCard({
 			className="rounded-xl border border-slate-200 bg-white p-5"
 			aria-label={`${name} treatment`}
 		>
-			<h3 className="flex items-center gap-3 text-base font-bold text-slate-700">
+			<h3 className="flex items-center gap-3 text-2xl font-bold tracking-tight text-blue-900">
 				<span className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-600 text-white">
 					<Pill className="h-6 w-6" aria-hidden />
 				</span>
@@ -254,6 +253,32 @@ function PatientCockpit({ params }: { params: Promise<{ id: string }> }) {
 		setSavedNotes(t);
 		setNoteSaved(true);
 		setTimeout(() => setNoteSaved(false), 2500);
+	};
+
+	const clearData = async () => {
+		await Promise.all([
+			fetch("/api/data-source", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ action: "clear_live", patientId: id }),
+			}),
+			fetch(`/api/tremor-episodes?patientId=${id}`, { method: "DELETE" }),
+			fetch(`/api/voice-episodes?patientId=${id}`, { method: "DELETE" }),
+			fetch("/api/bridge-reset", { method: "POST" }),
+		]).catch(() => null);
+		window.location.reload();
+	};
+
+	const setBridgeLive = async (on: boolean) => {
+		setBand((b) => ({
+			state: on ? "connected" : "disconnected",
+			source: b?.source ?? "band",
+		}));
+		await fetch("/api/bridge-live", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ on }),
+		}).catch(() => null);
 	};
 
 	const load = useCallback(async () => {
@@ -395,6 +420,24 @@ function PatientCockpit({ params }: { params: Promise<{ id: string }> }) {
 										: "Bracelet connected"
 									: "Bracelet disconnected"}
 							</span>
+						) : null}
+						{patient.id === "armel" ? (
+							<button
+								type="button"
+								onClick={clearData}
+								className="inline-flex items-center rounded-full border border-slate-300 bg-white px-3 py-1 text-sm font-medium text-slate-700 hover:bg-slate-100"
+							>
+								Clear data
+							</button>
+						) : null}
+						{patient.id === "armel" ? (
+							<button
+								type="button"
+								onClick={() => setBridgeLive(band?.state !== "connected")}
+								className="inline-flex items-center rounded-full bg-blue-600 px-3 py-1 text-sm font-medium text-white hover:bg-blue-700"
+							>
+								{band?.state === "connected" ? "Stop live" : "Start live"}
+							</button>
 						) : (
 							<span
 								className={`ml-auto inline-flex items-center gap-1.5 text-sm font-medium ${online ? "text-blue-700" : "text-slate-500"}`}
@@ -411,6 +454,29 @@ function PatientCockpit({ params }: { params: Promise<{ id: string }> }) {
 						)}
 					</div>
 				</div>
+
+				{patient.id === "armel" &&
+					(() => {
+						const sr = patient.cells.find(
+							(c) =>
+								c.day === "Live" &&
+								c.metric === "speech_rate" &&
+								typeof c.value === "number",
+						);
+						const v = sr ? Number(sr.value) : null;
+						if (v === null || v >= 100) return null;
+						return (
+							<div
+								role="alert"
+								className="mx-auto mt-3 max-w-7xl rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800"
+							>
+								<strong>Slow speech alert: {Math.round(v)} words/min.</strong>{" "}
+								Conversational speech is normally about 120–150 words/min; under
+								100 words/min is flagged as slowed speech, an early speech sign
+								followed in Parkinson's disease (hypokinetic speech).
+							</div>
+						);
+					})()}
 
 				{error && error !== "Patient not found" && (
 					<div
@@ -498,24 +564,8 @@ function PatientCockpit({ params }: { params: Promise<{ id: string }> }) {
 						</section>
 					)}
 
-					{patient.id === "armel" && (
-						<section aria-labelledby="armel-episodes">
-							<h2
-								id="armel-episodes"
-								className="text-lg font-bold tracking-tight text-slate-900"
-							>
-								Tremor episodes · 3D replay
-							</h2>
-							<p className="mb-3 mt-1 text-sm text-slate-600">
-								Recorded by the band. Replay shows her own forearm, measured on
-								her photos, in the posture the band suggests.
-							</p>
-							<LiveTremorEpisodes patientId="armel" />
-						</section>
-					)}
-
 					<div>
-						<h2 className="mb-3 text-lg font-bold tracking-tight text-slate-900">
+						<h2 className="mb-4 text-2xl font-bold tracking-tight text-blue-900">
 							Current medication level
 						</h2>
 						{currentMg > 0 ? (

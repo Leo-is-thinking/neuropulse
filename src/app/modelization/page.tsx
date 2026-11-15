@@ -29,8 +29,13 @@ export default function ModelizationPage() {
 }
 
 function Modelization() {
-	const PATIENT =
-		useSearchParams().get("patient") === "armel" ? "armel" : "henri-m";
+	const param = useSearchParams().get("patient");
+	const [saved, setSaved] = useState<string | null>(null);
+	useEffect(() => {
+		if (param) sessionStorage.setItem("np-patient", param);
+		setSaved(sessionStorage.getItem("np-patient"));
+	}, [param]);
+	const PATIENT = (param ?? saved) === "armel" ? "armel" : "henri-m";
 	const [who, setWho] = useState<{ name: string; age?: number } | null>(null);
 	const [cells, setCells] = useState<Cell[]>([]);
 	const [tDay, setTDay] = useState<Weekday>("Tue");
